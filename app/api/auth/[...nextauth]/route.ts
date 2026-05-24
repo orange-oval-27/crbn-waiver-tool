@@ -4,7 +4,7 @@ import type { NextAuthOptions } from 'next-auth';
 
 const ALLOWED_EMAILS = (process.env.ADMIN_EMAILS || 'kyle@crbnpickleball.com').split(',').map(e => e.trim());
 
-export const authOptions: NextAuthOptions = {
+const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
