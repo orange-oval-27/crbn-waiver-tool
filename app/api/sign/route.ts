@@ -34,13 +34,14 @@ async function generateWaiverPDF(data: {
     const words = text.split(' ');
     let line = '';
     for (const word of words) {
-      const test = line ? line + ' ' + word : word;
-      if (f.widthOfTextAtSize(test, size) > 512 && line) {
+      const testLine = line + (line ? ' ' : '') + word;
+      const testWidth = f.widthOfTextAtSize(testLine, size);
+      if (testWidth > 500 && line) {
         page.drawText(line, { x: 50, y, size, font: f, color: rgb(0, 0, 0) });
         y -= size + 4;
         line = word;
       } else {
-        line = test;
+        line = testLine;
       }
     }
     if (line) {
@@ -49,30 +50,27 @@ async function generateWaiverPDF(data: {
     }
   };
 
-  drawLine('CRBN PICKLEBALL - LIABILITY WAIVER', 16, true);
+  drawLine('CRBN PICKLEBALL - LIABILITY WAIVER', 14, true);
   y -= 8;
-  page.drawLine({ start: { x: 50, y }, end: { x: 562, y }, thickness: 1, color: rgb(0, 0, 0) });
-  y -= 14;
-  drawLine('SIGNER INFORMATION', 11, true);
-  y -= 4;
-  drawLine('Name: ' + data.first_name + ' ' + data.last_name);
-  drawLine('Email: ' + data.email);
-  if (data.phone) drawLine('Phone: ' + data.phone);
-  drawLine('Date of Birth: ' + data.date_of_birth);
-  if (data.guardian_name) drawLine('Parent/Guardian: ' + data.guardian_name);
-  if (data.emergency_contact_name) drawLine('Emergency Contact: ' + data.emergency_contact_name + (data.emergency_contact_phone ? ' - ' + data.emergency_contact_phone : ''));
+  drawLine(`Signer: ${data.first_name} ${data.last_name}`);
+  drawLine(`Email: ${data.email}`);
+  if (data.phone) drawLine(`Phone: ${data.phone}`);
+  drawLine(`Date of Birth: ${data.date_of_birth}`);
+  if (data.emergency_contact_name) drawLine(`Emergency Contact: ${data.emergency_contact_name}${data.emergency_contact_phone ? ' - ' + data.emergency_contact_phone : ''}`);
+  if (data.guardian_name) drawLine(`Parent/Guardian: ${data.guardian_name}`);
   y -= 8;
-  drawLine('WAIVER TERMS', 11, true);
+
+  drawLine('WAIVER AGREEMENT', 12, true);
   y -= 4;
+
   const clauses = [
-    '1. ASSUMPTION OF RISK: I acknowledge that pickleball involves inherent risks including physical injury, falls, and collisions. I voluntarily assume all such risks.',
-    '2. RELEASE OF LIABILITY: I release CRBN Pickleball, its owners, operators, employees, and agents from all liability, claims, or causes of action arising from my participation.',
-    '3. INDEMNIFICATION: I agree to indemnify and hold harmless the Released Parties from any loss or cost they may incur due to my participation.',
-    '4. MEDICAL AUTHORIZATION: In an emergency, I authorize the Released Parties to seek medical treatment on my behalf.',
-    '5. PHOTO/VIDEO RELEASE: I grant CRBN Pickleball permission to photograph or record me for promotional purposes.',
-    '6. GOVERNING LAW: This agreement is governed by applicable state law.',
-    '7. ENTIRE AGREEMENT: I have read, understand, and voluntarily sign this waiver.',
+    '1. ASSUMPTION OF RISK: I acknowledge that pickleball and related activities involve inherent risks, including but not limited to physical injury, falls, collisions with other players or equipment, and overexertion. I voluntarily assume all such risks.',
+    '2. RELEASE OF LIABILITY: I hereby release, waive, discharge, and covenant not to sue CRBN Pickleball, its owners, operators, employees, agents, and volunteers from any and all liability, claims, demands, actions, or causes of action arising out of or related to any loss, damage, or injury that may be sustained while participating in activities at CRBN Pickleball facilities.',
+    '3. INDEMNIFICATION: I agree to indemnify and hold harmless CRBN Pickleball from any loss, liability, damage, or costs that may incur due to my participation in activities.',
+    '4. MEDICAL AUTHORIZATION: I consent to emergency medical treatment if necessary and agree to be responsible for all medical expenses.',
+    '5. RULES COMPLIANCE: I agree to follow all facility rules and safety guidelines.',
   ];
+
   for (const c of clauses) { drawLine(c, 9); y -= 4; }
   y -= 8;
   page.drawLine({ start: { x: 50, y }, end: { x: 562, y }, thickness: 0.5, color: rgb(0.5, 0.5, 0.5) });
@@ -87,8 +85,18 @@ async function generateWaiverPDF(data: {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { first_name, last_name, email, phone, date_of_birth, signature_data,
-      emergency_contact_name, emergency_contact_phone, guardian_name, guardian_signature_data } = body;
+    const {
+      first_name,
+      last_name,
+      email,
+      phone,
+      date_of_birth,
+      signature_data,
+      emergency_contact_name,
+      emergency_contact_phone,
+      guardian_name,
+      guardian_signature_data,
+    } = body;
 
     if (!first_name || !last_name || !email || !date_of_birth || !signature_data) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -96,17 +104,29 @@ export async function POST(request: NextRequest) {
 
     const signed_at = new Date().toISOString();
 
+    // Determine if minor
+    const dob = new Date(date_of_birth);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const m = today.getMonth() - dob.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+    const is_minor = age < 18;
+
     const { data: waiver, error: dbError } = await supabase
       .from('waivers')
       .insert({
-        first_name, last_name, email,
+        first_name,
+        last_name,
+        email,
         phone: phone || null,
-        date_of_birth, signature_data,
-        guardian_name: guardian_name || null,
-        guardian_signature_data: guardian_signature_data || null,
+        date_of_birth,
+        signature_data,
         emergency_contact_name: emergency_contact_name || null,
         emergency_contact_phone: emergency_contact_phone || null,
+        guardian_name: guardian_name || null,
+        guardian_signature: guardian_signature_data || null,
         signed_at,
+        is_minor,
         status: 'active',
       })
       .select()
@@ -117,31 +137,57 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to save waiver' }, { status: 500 });
     }
 
-    const pdfBytes = await generateWaiverPDF({
-      first_name, last_name, email, phone, date_of_birth,
-      emergency_contact_name, emergency_contact_phone, guardian_name, signed_at,
-    });
-    const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
+    // Generate PDF
+    let pdfBytes: Uint8Array | null = null;
+    try {
+      pdfBytes = await generateWaiverPDF({
+        first_name,
+        last_name,
+        email,
+        phone,
+        date_of_birth,
+        emergency_contact_name,
+        emergency_contact_phone,
+        guardian_name,
+        signed_at,
+      });
+    } catch (pdfErr) {
+      console.error('PDF generation error:', pdfErr);
+    }
 
-    await resend.emails.send({
-      from: 'CRBN Pickleball <waivers@crbnpickleball.com>',
-      to: email,
-      subject: 'Your CRBN Pickleball Waiver - Signed Copy',
-      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto"><h2>Waiver Confirmed</h2><p>Hi ${first_name},</p><p>Thank you for signing the CRBN Pickleball Liability Waiver. Your signed copy is attached.</p><p><strong>Signed:</strong> ${new Date(signed_at).toLocaleString()}</p><p>See you on the courts!</p><p style="color:#666;font-size:12px">CRBN Pickleball</p></div>`,
-      attachments: [{ filename: `CRBN-Waiver-${first_name}-${last_name}.pdf`, content: pdfBase64 }],
-    });
+    const pdfBase64 = pdfBytes ? Buffer.from(pdfBytes).toString('base64') : null;
 
-    await resend.emails.send({
-      from: 'CRBN Waiver System <waivers@crbnpickleball.com>',
-      to: 'kyle@crbnpickleball.com',
-      subject: `New Waiver: ${first_name} ${last_name}`,
-      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto"><h2>New Waiver Signed</h2><table style="width:100%;border-collapse:collapse"><tr><td style="padding:8px;border-bottom:1px solid #eee"><strong>Name</strong></td><td style="padding:8px;border-bottom:1px solid #eee">${first_name} ${last_name}</td></tr><tr><td style="padding:8px;border-bottom:1px solid #eee"><strong>Email</strong></td><td style="padding:8px;border-bottom:1px solid #eee">${email}</td></tr><tr><td style="padding:8px;border-bottom:1px solid #eee"><strong>Phone</strong></td><td style="padding:8px;border-bottom:1px solid #eee">${phone || '-'}</td></tr><tr><td style="padding:8px;border-bottom:1px solid #eee"><strong>DOB</strong></td><td style="padding:8px;border-bottom:1px solid #eee">${date_of_birth}</td></tr><tr><td style="padding:8px;border-bottom:1px solid #eee"><strong>Minor</strong></td><td style="padding:8px;border-bottom:1px solid #eee">${guardian_name ? 'Yes - Guardian: ' + guardian_name : 'No'}</td></tr><tr><td style="padding:8px"><strong>Signed</strong></td><td style="padding:8px">${new Date(signed_at).toLocaleString()}</td></tr></table><p style="margin-top:16px"><a href="https://crbn-waiver-tool.vercel.app/admin" style="background:#000;color:#fff;padding:10px 20px;text-decoration:none;border-radius:6px">View Dashboard</a></p></div>`,
-      attachments: [{ filename: `CRBN-Waiver-${first_name}-${last_name}.pdf`, content: pdfBase64 }],
-    });
+    // Send confirmation email to signer
+    try {
+      const attachments = pdfBase64
+        ? [{ filename: 'CRBN-Waiver.pdf', content: pdfBase64 }]
+        : [];
+      await resend.emails.send({
+        from: 'CRBN Pickleball <noreply@crbnpickleball.com>',
+        to: email,
+        subject: 'Your CRBN Pickleball Waiver Confirmation',
+        html: `<h2>Thank you, ${first_name}!</h2><p>Your liability waiver has been signed and recorded. A copy is attached to this email for your records.</p><p>See you on the courts!</p><p>— CRBN Pickleball Team</p>`,
+        attachments,
+      });
+    } catch (emailErr) {
+      console.error('Signer email error:', emailErr);
+    }
+
+    // Send admin notification
+    try {
+      await resend.emails.send({
+        from: 'CRBN Waiver System <noreply@crbnpickleball.com>',
+        to: process.env.ADMIN_EMAILS || 'kyle@crbnpickleball.com',
+        subject: `New Waiver Signed: ${first_name} ${last_name}`,
+        html: `<h2>New Waiver Signed</h2><ul><li><strong>Name:</strong> ${first_name} ${last_name}</li><li><strong>Email:</strong> ${email}</li><li><strong>Phone:</strong> ${phone || 'N/A'}</li><li><strong>DOB:</strong> ${date_of_birth}</li><li><strong>Minor:</strong> ${is_minor ? 'Yes' : 'No'}</li>${guardian_name ? `<li><strong>Guardian:</strong> ${guardian_name}</li>` : ''}<li><strong>Signed At:</strong> ${new Date(signed_at).toLocaleString()}</li></ul>`,
+      });
+    } catch (adminEmailErr) {
+      console.error('Admin email error:', adminEmailErr);
+    }
 
     return NextResponse.json({ success: true, id: waiver.id });
-  } catch (error) {
-    console.error('Sign API error:', error);
+  } catch (err) {
+    console.error('Unexpected error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
